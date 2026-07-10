@@ -1,6 +1,8 @@
 local M = {
 	slidev_id = nil, -- State variable to track the Slidev job ID
-	slidev_symlink = nil, -- Absolute path of the symlink created inside slidev_cwd
+	slide_path = nil, -- Absolute path of the slides file currently being presented
+	slide_symlink = nil, -- Path Slidev is launched on (slides symlink inside slidev_cwd)
+	symlinks = {}, -- Absolute paths of every symlink created inside slidev_cwd (for cleanup)
 }
 
 ---@class SlidevOptions
@@ -18,18 +20,19 @@ local uv = vim.uv or vim.loop
 -- open and wipe them on close without leaking handlers between runs.
 local autocloseGroup = vim.api.nvim_create_augroup("SlidevAutoClose", { clear = true })
 
----Symlink the slides file into `slidev_cwd` so Slidev serves it from inside the
----addon project, then return the path Slidev should be launched on.
----@param slides_file_path string
----@return string link Absolute path of the symlink (or the file itself if already inside slidev_cwd)
-local function createSlidevSymlink(slides_file_path)
-	local target = vim.fn.fnamemodify(slides_file_path, ":p")
+---Create a symlink to `path` inside slidev_cwd (named after the file's basename)
+---so Slidev can serve it from within the addon project, and record it in
+---M.symlinks so close() can clean it up. No-ops when the file already lives in
+---slidev_cwd; stale symlinks left over from a previous run are replaced.
+---@param path string Absolute or relative path of the file to expose to Slidev
+function M.createSymlinkToSlidevCwd(path)
+	local target = vim.fn.fnamemodify(path, ":p")
 	local name = vim.fn.fnamemodify(target, ":t")
 	local link = vim.fs.joinpath(M.options.slidev_cwd, name)
 
-	-- If the slides file already lives in slidev_cwd, serve it directly.
+	-- If the file already lives in slidev_cwd, Slidev can serve it directly.
 	if vim.fn.fnamemodify(link, ":p") == target then
-		return target
+		return
 	end
 
 	local stat = uv.fs_lstat(link)
@@ -45,19 +48,97 @@ local function createSlidevSymlink(slides_file_path)
 	if not ok then
 		error("Failed to create Slidev symlink: " .. tostring(err))
 	end
-	return link
+
+	if not vim.tbl_contains(M.symlinks, link) then
+		table.insert(M.symlinks, link)
+	end
 end
 
----Remove the symlink created by createSlidevSymlink, if it still points at one.
-local function removeSlidevSymlink()
-	if not M.slidev_symlink then
+---Remove every symlink recorded in M.symlinks and reset the tracking table.
+local function removeSymlinks()
+	for _, link in ipairs(M.symlinks) do
+		local stat = uv.fs_lstat(link)
+		if stat and stat.type == "link" then
+			uv.fs_unlink(link)
+		end
+	end
+	M.symlinks = {}
+end
+
+---Collect the destination of every markdown image (`![alt](dest)`) in a slides
+---file using Treesitter, walking the injected markdown_inline trees.
+---@param slide_path string
+---@return string[] destinations Raw destination strings as written in the file
+local function queryImageDestinations(slide_path)
+	local destinations = {}
+
+	local content = table.concat(vim.fn.readfile(slide_path), "\n")
+
+	local ok, parser = pcall(vim.treesitter.get_string_parser, content, "markdown")
+	if not ok or not parser then
+		vim.notify("Slidev: markdown Treesitter parser is not available", vim.log.levels.WARN)
+		return destinations
+	end
+
+	local query = vim.treesitter.query.parse("markdown_inline", "(image (link_destination) @dest)")
+
+	parser:parse(true)
+
+	-- Images live in the injected markdown_inline trees, so recurse into children.
+	local function collect(ltree)
+		if ltree:lang() == "markdown_inline" then
+			for _, tree in pairs(ltree:trees()) do
+				for _, node in query:iter_captures(tree:root(), content) do
+					table.insert(destinations, vim.treesitter.get_node_text(node, content))
+				end
+			end
+		end
+		for _, child in pairs(ltree:children()) do
+			collect(child)
+		end
+	end
+	collect(parser)
+
+	return destinations
+end
+
+---Symlink every local image referenced by a slides file into slidev_cwd. Remote
+---assets (http://, data:, ...) and missing files are skipped; relative paths
+---resolve against the slides file's directory.
+---@param slide_path string
+function M.createImagesSymlinks(slide_path)
+	local slide_dir = vim.fn.fnamemodify(slide_path, ":h")
+	for _, dest in ipairs(queryImageDestinations(slide_path)) do
+		if not dest:match("^%a[%w+.-]*://") and not vim.startswith(dest, "data:") then
+			local abs = vim.startswith(dest, "/") and dest or vim.fs.joinpath(slide_dir, dest)
+			abs = vim.fn.fnamemodify(abs, ":p")
+			if uv.fs_stat(abs) then
+				M.createSymlinkToSlidevCwd(abs)
+			end
+		end
+	end
+end
+
+---Symlink the currently-tracked slides file into slidev_cwd and record the path
+---Slidev should be launched on.
+function M.createSlideSymlink()
+	if not M.slide_path then
 		return
 	end
-	local stat = uv.fs_lstat(M.slidev_symlink)
-	if stat and stat.type == "link" then
-		uv.fs_unlink(M.slidev_symlink)
+	M.createSymlinkToSlidevCwd(M.slide_path)
+	local name = vim.fn.fnamemodify(M.slide_path, ":t")
+	M.slide_symlink = vim.fs.joinpath(M.options.slidev_cwd, name)
+end
+
+---Sync everything the slides file depends on into slidev_cwd: the slides file
+---itself and every local image it references.
+function M.sync()
+	if not M.slide_path then
+		print("Slidev: no slides file is open. Run :SlidevOpen first.")
+		return
 	end
-	M.slidev_symlink = nil
+	M.createImagesSymlinks(M.slide_path)
+	M.createSlideSymlink()
 end
 
 ---Attach autocommands that close Slidev when the slides buffer is deleted or
@@ -171,15 +252,16 @@ function M.openSlidevPreviewInNewBrowserWindow()
 	return os.execute(command)
 end
 
----Full open flow: symlink the slides file into slidev_cwd, launch Slidev on it,
----and arm the auto-close autocommands.
+---Full open flow: track the slides file, sync it and its images into slidev_cwd,
+---launch Slidev on the synced slides file, and arm the auto-close autocommands.
 ---@param slides_file_path string
 function M.open(slides_file_path)
 	if M.options.before_open_hook then
 		M.options.before_open_hook(slides_file_path)
 	end
-	M.slidev_symlink = createSlidevSymlink(slides_file_path)
-	M.openSlidevServer(M.slidev_symlink)
+	M.slide_path = vim.fn.fnamemodify(slides_file_path, ":p")
+	M.sync()
+	M.openSlidevServer(M.slide_symlink or M.slide_path)
 	attachAutoClose(vim.api.nvim_get_current_buf())
 	if M.options.after_open_hook then
 		M.options.after_open_hook(slides_file_path)
@@ -189,14 +271,16 @@ end
 ---Full close flow: stop the server, remove the symlink, and disarm the
 ---auto-close autocommands. No-op when nothing is open.
 function M.close()
-	if not M.isSlidevRunning() and not M.slidev_symlink then
+	if not M.isSlidevRunning() and #M.symlinks == 0 and not M.slide_path then
 		return
 	end
 	if M.options.before_close_hook then
 		M.options.before_close_hook()
 	end
 	M.closeSlidevServer()
-	removeSlidevSymlink()
+	removeSymlinks()
+	M.slide_path = nil
+	M.slide_symlink = nil
 	clearAutoClose()
 	if M.options.after_close_hook then
 		M.options.after_close_hook()
@@ -229,6 +313,10 @@ M.setup = function(optionOverrides)
 
 	vim.api.nvim_create_user_command("SlidevClose", function()
 		M.close()
+	end, {})
+
+	vim.api.nvim_create_user_command("SlidevSync", function()
+		M.sync()
 	end, {})
 
 	vim.api.nvim_create_user_command("SlidevBrowse", function()
