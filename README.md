@@ -4,6 +4,8 @@
 
 This plugin provides a simple way to run Slidev directly from Neovim to easily visualize your slides.
 
+https://github.com/user-attachments/assets/59b366aa-2967-4eee-8d11-c25d09beff3d
+
 The motivation behind this plugin was to be able to run Slidev with a common configuration (components, themes, etc.) on any file, not necessarily in the slidev_cwd folder, in a seamless way.
 
 ## Features
