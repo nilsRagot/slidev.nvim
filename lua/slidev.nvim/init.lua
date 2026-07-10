@@ -1,15 +1,15 @@
 local M = {
-	slidev_jobid = nil,
+	slidev_jobid = nil, -- State variable to track the Slidev job ID
 }
-
-M.options = {}
 
 ---@class SlidevOptions
 ---@field slidev_cwd string|nil
+---@field slidev_port integer
 ---@field slidev_command string[]
 ---@field before_open_hook fun(slides_file_path: string)|fun()|nil
 ---@field after_open_hook fun(slides_file_path: string)|fun()|nil
----@field browser_app_name string|nil
+---@field before_close_hook fun()|nil
+---@field after_close_hook fun()|nil
 
 ---Ensure the slides file's YAML frontmatter registers `slidev_cwd` as an addon.
 ---Uses obsidian.nvim's YAML parser for a proper parse/serialize roundtrip.
@@ -75,16 +75,11 @@ end
 ---@type SlidevOptions
 local defaultOptions = {
 	slidev_cwd = nil,
-	slidev_command = { "npm", "run", "dev" },
-	browser_app_name = "Arc",
+	slidev_port = 3030,
+	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
 	before_open_hook = nil,
-	after_open_hook = function(url)
-		if not M.options.browser_app_name then
-			return
-		end
-		local command = string.format("open -a %s %s", M.options.browser_app_name, url)
-		os.execute(command)
-	end,
+	after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
+	before_close_hook = nil,
 	after_close_hook = nil,
 }
 
@@ -103,7 +98,7 @@ local function openSlidev(slides_file_path)
 		return
 	end
 	local command = M.options.slidev_command
-	table.insert(command, "--")
+	table.insert(command, "--open")
 	table.insert(command, slides_file_path)
 	M.slidev_id = vim.fn.jobstart(command, {
 		cwd = M.options.slidev_cwd,
@@ -128,12 +123,55 @@ local function browseSlidev()
 	})
 end
 
+---@return "Windows"|"Darwin"|"Linux"|"unknown"
+local function detectOs()
+	local os_name = "unknown"
+
+	-- 1. OS Detection
+	-- If the path separator is '\', we are on Windows
+	local separator = package.config:sub(1, 1)
+
+	if separator == "\\" then
+		os_name = "Windows"
+	else
+		-- For Unix-like systems (macOS, Linux), we query the system
+		local f = io.popen("uname -s")
+		if f then
+			-- Read the response and remove the newline character
+			os_name = f:read("*a"):gsub("\n", "")
+			f:close()
+		end
+	end
+
+	return os_name
+end
+
+local function openSlidevPreviewInNewBrowserWindow()
+	local os_name = detectOs()
+
+	local command = ""
+	local url = string.format("http://localhost:%d", M.options.slidev_port)
+	if os_name == "Windows" then
+		-- The empty quotes after 'start' prevent bugs with certain URLs on Windows
+		command = string.format('start "" "%s"', url)
+	elseif os_name == "Darwin" then
+		command = string.format('open "%s"', url)
+	elseif os_name == "Linux" then
+		command = string.format('xdg-open "%s"', url)
+	else
+		print("Unsupported or unknown operating system.")
+		return false
+	end
+	-- 3. Execute the command
+	return os.execute(command)
+end
+
 M = {
 	openSlidev = openSlidev,
 	closeSlidev = closeSlidev,
 	isSlidevRunning = isSlidevRunning,
 	browseSlidev = browseSlidev,
-	ensureAddonInFrontmatter = ensureAddonInFrontmatter,
+	openSlidevPreviewInNewBrowserWindow = openSlidevPreviewInNewBrowserWindow,
 }
 
 ---@param optionOverrides SlidevOptions?
@@ -143,6 +181,7 @@ M.setup = function(optionOverrides)
 	if not M.options.slidev_cwd then
 		error("slidev_cwd must be set in the options")
 	end
+
 	vim.api.nvim_create_user_command("SlidevOpen", function(options)
 		local slides_file_path = options.args == "" and vim.api.nvim_buf_get_name(0) or options.args
 		if M.options.before_open_hook then
@@ -154,12 +193,17 @@ M.setup = function(optionOverrides)
 			M.options.after_open_hook(slides_file_path)
 		end
 	end, {})
+
 	vim.api.nvim_create_user_command("SlidevClose", function()
+		if M.options.before_close_hook then
+			M.options.before_close_hook()
+		end
 		closeSlidev()
 		if M.options.after_close_hook then
 			M.options.after_close_hook()
 		end
 	end, {})
+
 	vim.api.nvim_create_user_command("SlidevBrowse", function()
 		browseSlidev()
 	end, {})
