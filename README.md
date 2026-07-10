@@ -41,6 +41,7 @@ The plugin provides the following user commands:
 
 - `:SlidevOpen <optional-path-to-slides-file>` - launches a Slidev server in the background, opening the provided slides file or the current buffer if no path is provided. To make the components and themes from your `slidev_cwd` folder available, the plugin symlinks the slides file into `slidev_cwd` and serves it from there (no changes are made to your presentation file). The server is automatically closed when the slides buffer is deleted or when Neovim quits.
 - `:SlidevClose` - kills the Slidev server if it is running and removes the symlink previously created in `slidev_cwd`.
+- `:SlidevSync` - Syncs all the symlinks for images in the current presentation. To use if you add new images to your presentation while the Slidev server is running.
 - `:SlidevBrowse` - Uses Telescope.nvim to browse for slidev presentations in your `slidev_cwd` folder.
 
 ### Lua API
@@ -49,6 +50,7 @@ The plugin exposes the following methods :
 
 - `open(slideFilePath: string)` : full open flow invoked by `:SlidevOpen` — creates the symlink in `slidev_cwd`, launches the server, arms the auto-close autocommands, and runs the open hooks.
 - `close()` : full close flow invoked by `:SlidevClose` — stops the server, removes the symlink, disarms the auto-close autocommands, and runs the close hooks.
+- `sync()` : syncs all the symlinks for images in the current presentation, invoked by `:SlidevSync`.
 - `openSlidevServer(slideFilePath: string)` : low-level helper that only launches the Slidev server in the background.
 - `closeSlidevServer()` : low-level helper that only stops the Slidev server if it is running.
 - `isSlidevRunning()` : utility function to check if the Slidev server is running.
