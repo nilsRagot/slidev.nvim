@@ -47,6 +47,24 @@ return {
 }
 ```
 
+## Mappings suggestions
+
+By default, none of the User Commands are mapped to any keybinding. Here are some suggestions:
+
+```lua
+map("n", "<leader>So", function()
+  vim.cmd("SlidevOpen")
+end, { desc = "Open Slidev" })
+
+map("n", "<leader>Sc", function()
+  vim.cmd("SlidevClose")
+end, { desc = "Close Slidev" })
+
+map("n", "<leader>Sb", function()
+  vim.cmd("SlidevBrowse")
+end, { desc = "Browse Slidev" })
+```
+
 ## Configuration
 
 The configuration of Slidev.nvim allows you to:
