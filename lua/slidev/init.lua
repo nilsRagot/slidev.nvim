@@ -121,6 +121,9 @@ function M.openSlidevServer(slides_file_path)
 	-- Copy the configured command so we never mutate the shared options table.
 	local command = vim.deepcopy(M.options.slidev_command)
 	table.insert(command, slides_file_path)
+	for _, arg in ipairs({ "--port", tostring(M.options.slidev_port) }) do
+		table.insert(command, arg)
+	end
 	M.slidev_id = vim.fn.jobstart(command, {
 		cwd = M.options.slidev_cwd,
 	})
@@ -204,7 +207,7 @@ end
 local defaultOptions = {
 	slidev_cwd = nil,
 	slidev_port = 3030,
-	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
+	slidev_command = { "npx", "slidev" },
 	before_open_hook = nil,
 	after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
 	before_close_hook = nil,

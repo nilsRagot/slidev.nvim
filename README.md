@@ -104,7 +104,7 @@ Below are the default configuration values:
 require("slidev").setup({
     slidev_cwd = nil, -- Must be set to the path of your slidev project folder, otherwise the plugin won't start.
     slidev_port = 3030, -- The port on which the Slidev server will run.
-	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
+	slidev_command = { "npx", "slidev"},
     ---@type fun(opened_file_path: string) | fun() | nil
     before_open_hook = nil,
     ---@type fun(opened_file_path: string) | fun() | nil
