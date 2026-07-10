@@ -35,13 +35,13 @@ return {
     "nilsRagot/slidev.nvim",
     dependencies = {
         -- Only the frontmatter parser is used from this plugin, so you can disable the plugin as long as it's installed.
-        "obsidian-nvim/obsidian.nvim"
+        "obsidian-nvim/obsidian.nvim",
         -- Used to browse the slidev_cwd folder, if you're not using it, you can still define your own `browseSlidev` function that browses the slidev_cwd folder using your favorite file picker.
         "nvim-telescope/telescope.nvim",
-    }
+    },
     opts = {
         slidev_cwd = "YOUR_SLIDEV_CWD_PATH", -- Mandatory, the path to your slidev project folder
-    }
+    },
 }
 ```
 
@@ -61,7 +61,7 @@ require("slidev").setup({
     slidev_port = 3030, -- The port on which the Slidev server will run.
 	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
     ---@type fun(opened_file_path: string) | fun() | nil
-    before_open_hook = nil
+    before_open_hook = nil,
     ---@type fun(opened_file_path: string) | fun() | nil
     after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
     ---@type fun() | nil
