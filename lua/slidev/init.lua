@@ -1,5 +1,5 @@
 local M = {
-	slidev_jobid = nil, -- State variable to track the Slidev job ID
+	slidev_id = nil, -- State variable to track the Slidev job ID
 }
 
 ---@class SlidevOptions
@@ -72,66 +72,12 @@ local function ensureAddonInFrontmatter(slides_file_path)
 	vim.fn.writefile(new_lines, slides_file_path)
 end
 
----@type SlidevOptions
-local defaultOptions = {
-	slidev_cwd = nil,
-	slidev_port = 3030,
-	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
-	before_open_hook = nil,
-	after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
-	before_close_hook = nil,
-	after_close_hook = nil,
-}
-
-local function isSlidevRunning()
-	if M.slidev_id then
-		local status = vim.fn.jobwait({ M.slidev_id }, 0)[1]
-		return status == -1 -- -1 means the job is still running
-	end
-	return false
-end
-
----@param slides_file_path string
-local function openSlidev(slides_file_path)
-	if isSlidevRunning() then
-		print("Slidev is already running, Job id : " .. M.slidev_id)
-		return
-	end
-	local command = M.options.slidev_command
-	table.insert(command, "--open")
-	table.insert(command, slides_file_path)
-	M.slidev_id = vim.fn.jobstart(command, {
-		cwd = M.options.slidev_cwd,
-	})
-	print("Slidev started with Job id: " .. M.slidev_id)
-end
-
-local function closeSlidev()
-	if isSlidevRunning() then
-		vim.fn.jobstop(M.slidev_id)
-		print("Slidev stopped, Job id: " .. M.slidev_id)
-		M.slidev_id = nil
-	else
-		print("Slidev is not running.")
-	end
-end
-
-local function browseSlidev()
-	require("telescope.builtin").find_files({
-		prompt_title = "Browse Slidev",
-		cwd = M.options.slidev_cwd,
-	})
-end
-
 ---@return "Windows"|"Darwin"|"Linux"|"unknown"
 local function detectOs()
 	local os_name = "unknown"
-
-	-- 1. OS Detection
-	-- If the path separator is '\', we are on Windows
 	local separator = package.config:sub(1, 1)
-
 	if separator == "\\" then
+		-- If the path separator is '\', we are on Windows
 		os_name = "Windows"
 	else
 		-- For Unix-like systems (macOS, Linux), we query the system
@@ -146,7 +92,51 @@ local function detectOs()
 	return os_name
 end
 
-local function openSlidevPreviewInNewBrowserWindow()
+function M.isSlidevRunning()
+	if M.slidev_id then
+		local status = vim.fn.jobwait({ M.slidev_id }, 0)[1]
+		return status == -1 -- -1 means the job is still running
+	end
+	return false
+end
+
+---@param slides_file_path string
+function M.openSlidevServer(slides_file_path)
+	if M.isSlidevRunning() then
+		print("Slidev is already running, Job id : " .. M.slidev_id)
+		return
+	end
+	-- Copy the configured command so we never mutate the shared options table.
+	local command = vim.deepcopy(M.options.slidev_command)
+	table.insert(command, slides_file_path)
+	M.slidev_id = vim.fn.jobstart(command, {
+		cwd = M.options.slidev_cwd,
+	})
+	print("Slidev started with Job id: " .. M.slidev_id)
+end
+
+function M.closeSlidevServer()
+	if M.isSlidevRunning() then
+		vim.fn.jobstop(M.slidev_id)
+		print("Slidev stopped, Job id: " .. M.slidev_id)
+		M.slidev_id = nil
+	else
+		print("Slidev is not running.")
+	end
+end
+
+function M.browseSlidev()
+	if not require("telescope.builtin") then
+		print("Telescope is not available.")
+		return
+	end
+	require("telescope.builtin").find_files({
+		prompt_title = "Browse Slidev",
+		cwd = M.options.slidev_cwd,
+	})
+end
+
+function M.openSlidevPreviewInNewBrowserWindow()
 	local os_name = detectOs()
 
 	local command = ""
@@ -166,12 +156,15 @@ local function openSlidevPreviewInNewBrowserWindow()
 	return os.execute(command)
 end
 
-M = {
-	openSlidev = openSlidev,
-	closeSlidev = closeSlidev,
-	isSlidevRunning = isSlidevRunning,
-	browseSlidev = browseSlidev,
-	openSlidevPreviewInNewBrowserWindow = openSlidevPreviewInNewBrowserWindow,
+---@type SlidevOptions
+local defaultOptions = {
+	slidev_cwd = nil,
+	slidev_port = 3030,
+	slidev_command = { "npm", "run", "dev", "--", "--port", tostring(3030) },
+	before_open_hook = nil,
+	after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
+	before_close_hook = nil,
+	after_close_hook = nil,
 }
 
 ---@param optionOverrides SlidevOptions?
@@ -181,6 +174,11 @@ M.setup = function(optionOverrides)
 	if not M.options.slidev_cwd then
 		error("slidev_cwd must be set in the options")
 	end
+	if not require("obsidian.yaml") then
+		error(
+			"obsidian.nvim is required for slidev.nvim to parse and modify YAML frontmatter. Please install obsidian.nvim."
+		)
+	end
 
 	vim.api.nvim_create_user_command("SlidevOpen", function(options)
 		local slides_file_path = options.args == "" and vim.api.nvim_buf_get_name(0) or options.args
@@ -188,7 +186,7 @@ M.setup = function(optionOverrides)
 			M.options.before_open_hook(slides_file_path)
 		end
 		ensureAddonInFrontmatter(slides_file_path)
-		openSlidev(slides_file_path)
+		M.openSlidevServer(slides_file_path)
 		if M.options.after_open_hook then
 			M.options.after_open_hook(slides_file_path)
 		end
@@ -198,14 +196,14 @@ M.setup = function(optionOverrides)
 		if M.options.before_close_hook then
 			M.options.before_close_hook()
 		end
-		closeSlidev()
+		M.closeSlidevServer()
 		if M.options.after_close_hook then
 			M.options.after_close_hook()
 		end
 	end, {})
 
 	vim.api.nvim_create_user_command("SlidevBrowse", function()
-		browseSlidev()
+		M.browseSlidev()
 	end, {})
 end
 

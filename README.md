@@ -20,8 +20,8 @@ The plugin provides the following user commands:
 
 The plugin exposes the following methods :
 
-- `openSlidev` : function invoked by the `:SlidevOpen` command
-- `closeSlidev` : function invoked by the `:SlidevClose` command
+- `openSlidevServer(slideFilePath: string)` : opens the Slidev server in the background
+- `closeSlidevServer` : closes the Slidev server if it is running
 - `isSlidevRunning` : utility function to check if the Slidev server is running
 - `browseSlidev` : function invoked by the `:SlidevBrowse` command
 - `openSlidevPreviewInNewBrowserWindow` : function that opens the Slidev preview in a new browser window, it's the default value of the `after_open_hook` configuration option.
