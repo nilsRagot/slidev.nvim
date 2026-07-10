@@ -12,19 +12,21 @@ The motivation behind this plugin was to be able to run Slidev with a common con
 
 The plugin provides the following user commands:
 
-- `:SlidevOpen <optional-path-to-slides-file>` - launches a Slidev server on the background, opening the provided slides file or the current buffer if no path is provided. The server will be automatically killed when Neovim exits. To make the components and themes from your `slidev_cwd` folder available, the plugin will automatically add an `addon` key pointing to it in the frontmatter of the presentation.
-- `:SlidevClose` - kills the Slidev server if it is running.
+- `:SlidevOpen <optional-path-to-slides-file>` - launches a Slidev server in the background, opening the provided slides file or the current buffer if no path is provided. To make the components and themes from your `slidev_cwd` folder available, the plugin symlinks the slides file into `slidev_cwd` and serves it from there (no changes are made to your presentation file). The server is automatically closed when the slides buffer is deleted or when Neovim quits.
+- `:SlidevClose` - kills the Slidev server if it is running and removes the symlink previously created in `slidev_cwd`.
 - `:SlidevBrowse` - Uses Telescope.nvim to browse for slidev presentations in your `slidev_cwd` folder.
 
 ### Lua API
 
 The plugin exposes the following methods :
 
-- `openSlidevServer(slideFilePath: string)` : opens the Slidev server in the background
-- `closeSlidevServer` : closes the Slidev server if it is running
-- `isSlidevRunning` : utility function to check if the Slidev server is running
-- `browseSlidev` : function invoked by the `:SlidevBrowse` command
-- `openSlidevPreviewInNewBrowserWindow` : function that opens the Slidev preview in a new browser window, it's the default value of the `after_open_hook` configuration option.
+- `open(slideFilePath: string)` : full open flow invoked by `:SlidevOpen` — creates the symlink in `slidev_cwd`, launches the server, arms the auto-close autocommands, and runs the open hooks.
+- `close()` : full close flow invoked by `:SlidevClose` — stops the server, removes the symlink, disarms the auto-close autocommands, and runs the close hooks.
+- `openSlidevServer(slideFilePath: string)` : low-level helper that only launches the Slidev server in the background.
+- `closeSlidevServer()` : low-level helper that only stops the Slidev server if it is running.
+- `isSlidevRunning()` : utility function to check if the Slidev server is running.
+- `browseSlidev()` : function invoked by the `:SlidevBrowse` command.
+- `openSlidevPreviewInNewBrowserWindow()` : function that opens the Slidev preview in a new browser window, it's the default value of the `after_open_hook` configuration option.
 
 ## Installation
 
@@ -34,9 +36,7 @@ Using Lazy.nvim:
 return {
     "nilsRagot/slidev.nvim",
     dependencies = {
-        -- Only the frontmatter parser is used from this plugin, so you can disable the plugin as long as it's installed.
-        "obsidian-nvim/obsidian.nvim",
-        -- Used to browse the slidev_cwd folder, if you're not using it, you can still define your own `browseSlidev` function that browses the slidev_cwd folder using your favorite file picker.
+        -- Used by `:SlidevBrowse` to browse the slidev_cwd folder. If you're not using it, you can still define your own `browseSlidev` function that browses the slidev_cwd folder using your favorite file picker.
         "nvim-telescope/telescope.nvim",
     },
     opts = {
@@ -63,7 +63,7 @@ require("slidev").setup({
     ---@type fun(opened_file_path: string) | fun() | nil
     before_open_hook = nil,
     ---@type fun(opened_file_path: string) | fun() | nil
-    after_open_hook = M.openSlidevPreviewInNewBrowserWindow,
+    after_open_hook = require("slidev").openSlidevPreviewInNewBrowserWindow,
     ---@type fun() | nil
     before_close_hook = nil,
     ---@type fun() | nil

@@ -1,5 +1,6 @@
 local M = {
 	slidev_id = nil, -- State variable to track the Slidev job ID
+	slidev_symlink = nil, -- Absolute path of the symlink created inside slidev_cwd
 }
 
 ---@class SlidevOptions
@@ -11,65 +12,76 @@ local M = {
 ---@field before_close_hook fun()|nil
 ---@field after_close_hook fun()|nil
 
----Ensure the slides file's YAML frontmatter registers `slidev_cwd` as an addon.
----Uses obsidian.nvim's YAML parser for a proper parse/serialize roundtrip.
+local uv = vim.uv or vim.loop
+
+-- Autocommands that auto-close Slidev live in this group so we can attach on
+-- open and wipe them on close without leaking handlers between runs.
+local autocloseGroup = vim.api.nvim_create_augroup("SlidevAutoClose", { clear = true })
+
+---Symlink the slides file into `slidev_cwd` so Slidev serves it from inside the
+---addon project, then return the path Slidev should be launched on.
 ---@param slides_file_path string
-local function ensureAddonInFrontmatter(slides_file_path)
-	local yaml = require("obsidian.yaml")
-	local addon = M.options.slidev_cwd
-	local lines = vim.fn.readfile(slides_file_path)
+---@return string link Absolute path of the symlink (or the file itself if already inside slidev_cwd)
+local function createSlidevSymlink(slides_file_path)
+	local target = vim.fn.fnamemodify(slides_file_path, ":p")
+	local name = vim.fn.fnamemodify(target, ":t")
+	local link = vim.fs.joinpath(M.options.slidev_cwd, name)
 
-	-- Split the leading `---` ... `---` frontmatter block from the body.
-	local fm_lines, body_start = {}, 1
-	if lines[1] == "---" then
-		for i = 2, #lines do
-			if lines[i] == "---" then
-				body_start = i + 1
-				break
-			end
-			table.insert(fm_lines, lines[i])
+	-- If the slides file already lives in slidev_cwd, serve it directly.
+	if vim.fn.fnamemodify(link, ":p") == target then
+		return target
+	end
+
+	local stat = uv.fs_lstat(link)
+	if stat then
+		if stat.type == "link" then
+			uv.fs_unlink(link) -- stale symlink left over from a previous run
+		else
+			error("Cannot create Slidev symlink: a file already exists at " .. link)
 		end
 	end
 
-	local data, key_order = {}, {}
-	if #fm_lines > 0 then
-		local parsed, order = yaml.loads(table.concat(fm_lines, "\n"))
-		if type(parsed) == "table" then
-			data = parsed
-			key_order = order or {}
-		end
+	local ok, err = uv.fs_symlink(target, link)
+	if not ok then
+		error("Failed to create Slidev symlink: " .. tostring(err))
 	end
+	return link
+end
 
-	data.addons = data.addons or {}
-	for _, v in ipairs(data.addons) do
-		if v == addon then
-			return -- already registered, leave the file untouched
-		end
+---Remove the symlink created by createSlidevSymlink, if it still points at one.
+local function removeSlidevSymlink()
+	if not M.slidev_symlink then
+		return
 	end
-	table.insert(data.addons, addon)
-	if not vim.tbl_contains(key_order, "addons") then
-		table.insert(key_order, "addons")
+	local stat = uv.fs_lstat(M.slidev_symlink)
+	if stat and stat.type == "link" then
+		uv.fs_unlink(M.slidev_symlink)
 	end
+	M.slidev_symlink = nil
+end
 
-	-- Build a comparator from the recorded order so existing keys keep their
-	-- position; any keys not seen during parsing sort to the end.
-	local rank = {}
-	for i, k in ipairs(key_order) do
-		rank[k] = i
-	end
-	local order_fn = function(a, b)
-		return (rank[a] or math.huge) < (rank[b] or math.huge)
-	end
+---Attach autocommands that close Slidev when the slides buffer is deleted or
+---when Neovim quits. Clears any previously attached handlers first.
+---@param bufnr integer
+local function attachAutoClose(bufnr)
+	vim.api.nvim_clear_autocmds({ group = autocloseGroup })
+	vim.api.nvim_create_autocmd("BufDelete", {
+		group = autocloseGroup,
+		buffer = bufnr,
+		callback = function()
+			M.close()
+		end,
+	})
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = autocloseGroup,
+		callback = function()
+			M.close()
+		end,
+	})
+end
 
-	local new_lines = { "---" }
-	for _, l in ipairs(yaml.dumps_lines(data, order_fn)) do
-		table.insert(new_lines, l)
-	end
-	table.insert(new_lines, "---")
-	for i = body_start, #lines do
-		table.insert(new_lines, lines[i])
-	end
-	vim.fn.writefile(new_lines, slides_file_path)
+local function clearAutoClose()
+	vim.api.nvim_clear_autocmds({ group = autocloseGroup })
 end
 
 ---@return "Windows"|"Darwin"|"Linux"|"unknown"
@@ -156,6 +168,38 @@ function M.openSlidevPreviewInNewBrowserWindow()
 	return os.execute(command)
 end
 
+---Full open flow: symlink the slides file into slidev_cwd, launch Slidev on it,
+---and arm the auto-close autocommands.
+---@param slides_file_path string
+function M.open(slides_file_path)
+	if M.options.before_open_hook then
+		M.options.before_open_hook(slides_file_path)
+	end
+	M.slidev_symlink = createSlidevSymlink(slides_file_path)
+	M.openSlidevServer(M.slidev_symlink)
+	attachAutoClose(vim.api.nvim_get_current_buf())
+	if M.options.after_open_hook then
+		M.options.after_open_hook(slides_file_path)
+	end
+end
+
+---Full close flow: stop the server, remove the symlink, and disarm the
+---auto-close autocommands. No-op when nothing is open.
+function M.close()
+	if not M.isSlidevRunning() and not M.slidev_symlink then
+		return
+	end
+	if M.options.before_close_hook then
+		M.options.before_close_hook()
+	end
+	M.closeSlidevServer()
+	removeSlidevSymlink()
+	clearAutoClose()
+	if M.options.after_close_hook then
+		M.options.after_close_hook()
+	end
+end
+
 ---@type SlidevOptions
 local defaultOptions = {
 	slidev_cwd = nil,
@@ -174,32 +218,14 @@ M.setup = function(optionOverrides)
 	if not M.options.slidev_cwd then
 		error("slidev_cwd must be set in the options")
 	end
-	if not require("obsidian.yaml") then
-		error(
-			"obsidian.nvim is required for slidev.nvim to parse and modify YAML frontmatter. Please install obsidian.nvim."
-		)
-	end
 
 	vim.api.nvim_create_user_command("SlidevOpen", function(options)
 		local slides_file_path = options.args == "" and vim.api.nvim_buf_get_name(0) or options.args
-		if M.options.before_open_hook then
-			M.options.before_open_hook(slides_file_path)
-		end
-		ensureAddonInFrontmatter(slides_file_path)
-		M.openSlidevServer(slides_file_path)
-		if M.options.after_open_hook then
-			M.options.after_open_hook(slides_file_path)
-		end
-	end, {})
+		M.open(slides_file_path)
+	end, { nargs = "?", complete = "file" })
 
 	vim.api.nvim_create_user_command("SlidevClose", function()
-		if M.options.before_close_hook then
-			M.options.before_close_hook()
-		end
-		M.closeSlidevServer()
-		if M.options.after_close_hook then
-			M.options.after_close_hook()
-		end
+		M.close()
 	end, {})
 
 	vim.api.nvim_create_user_command("SlidevBrowse", function()
