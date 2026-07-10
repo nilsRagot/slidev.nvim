@@ -90,6 +90,10 @@ end, { desc = "Close Slidev" })
 map("n", "<leader>Sb", function()
   vim.cmd("SlidevBrowse")
 end, { desc = "Browse Slidev" })
+
+map("n", "<leader>Ss", function()
+  vim.cmd("SlidevSync")
+end, { desc = "Sync Slidev Symlinks" })
 ```
 
 ## Configuration
