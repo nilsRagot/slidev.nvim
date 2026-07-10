@@ -1,12 +1,37 @@
 # Slidev.nvim
 
+## What is Slidev
+
 [Slidev](https://sli.dev/) is a nodeJS tool to create slides using markdown and Vue components.
 
-This plugin provides a simple way to run Slidev directly from Neovim to easily visualize your slides.
+The recommended way of using Slidev is to create a Slidev project using `npm init slidev@latest` which creates a node project with the following structure :
+
+```
+.
+├── components
+│   └── Counter.vue
+├── netlify.toml
+├── package-lock.json
+├── package.json
+├── pages
+│   └── imported-slides.md
+├── pnpm-workspace.yaml
+├── README.md
+├── slides.md
+├── snippets
+│   └── external.ts
+└── vercel.json
+```
+
+You can install/create your themes and create/import your own components inside that project (referred to as `slidev_cwd` in this plugin).
+
+## Why Slidev.nvim ?
+
+If you want to run Slidev on file that is not in the Slidev project folder, it will be as if you were running Slidev from a fresh install, without any of your components or themes.
+
+The intent of this plugin is, in addition to **providing a simpler and better way to interact with Slidev from Neovim**, to allow you to **run Slidev on any slides file** while still being able to use your custom components and themes.
 
 https://github.com/user-attachments/assets/59b366aa-2967-4eee-8d11-c25d09beff3d
-
-The motivation behind this plugin was to be able to run Slidev with a common configuration (components, themes, etc.) on any file, not necessarily in the slidev_cwd folder, in a seamless way.
 
 ## Features
 
